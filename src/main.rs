@@ -10,7 +10,7 @@ use std::str;
 use std::fs;
 
 #[derive(Deserialize, Serialize, Debug)]
-struct LicenseFile<'a> {
+struct MachineFile<'a> {
   enc: &'a str,
   sig: &'a str,
   alg: &'a str,
@@ -20,7 +20,10 @@ struct LicenseFile<'a> {
 #[clap(author, version, about, long_about = None)]
 struct Args {
   #[clap(short = 'l', long, value_parser)]
-  license_key: String,
+  machine_key: String,
+
+  #[clap(short = 'f', long, value_parser)]
+  fingerprint: String,
 
   #[clap(short = 'k', long, value_parser)]
   public_key: String,
@@ -31,7 +34,8 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
   let args = Args::parse();
-  let license_key: &str = &args.license_key;
+  let machine_key: &str = &args.machine_key;
+  let fingerprint: &str = &args.fingerprint;
   let public_key: &str = &args.public_key;
   let lic_path: &str = &args.path;
 
@@ -43,25 +47,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   let cert = match fs::read_to_string(lic_path) {
     Ok(content) => content,
-    Err(_) => return Err("failed to import license file".into()),
+    Err(_) => return Err("failed to import machine file".into()),
   };
 
-  // Extract the encoded payload from the license file.
+  // Extract the encoded payload from the machine file.
   let enc = cert
-    .replace("-----BEGIN LICENSE FILE-----", "")
-    .replace("-----END LICENSE FILE-----", "")
+    .replace("-----BEGIN MACHINE FILE-----", "")
+    .replace("-----END MACHINE FILE-----", "")
     .replace('\n', "");
 
   // Decode the payload.
   let payload = match base64::decode(enc) {
     Ok(bytes) => String::from_utf8(bytes)?,
-    Err(_) => return Err("failed to decode license file".into()),
+    Err(_) => return Err("failed to decode machine file".into()),
   };
 
   // Parse the payload.
-  let lic: LicenseFile = match serde_json::from_str(payload.as_str()) {
+  let lic: MachineFile = match serde_json::from_str(payload.as_str()) {
     Ok(json) => json,
-    Err(_) => return Err("failed to parse license file".into()),
+    Err(_) => return Err("failed to parse machine file".into()),
   };
 
   // Assert algorithm is supported.
@@ -70,8 +74,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     _ => return Err("algorithm is not supported".into()),
   }
 
-  // Verify the license file's signature.
-  let msg = format!("license/{}", lic.enc);
+  // Verify the machine file's signature.
+  let msg = format!("machine/{}", lic.enc);
   let sig: [u8; SIGNATURE_LENGTH] = match base64::decode(lic.sig)?.try_into() {
     Ok(sig) => sig,
     Err(_) => return Err("signature format is invalid".into()),
@@ -79,17 +83,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   match public_key.verify(msg.as_bytes(), &sig.into()) {
     Ok(_) => (),
-    Err(_) => return Err("license file is invalid".into()),
+    Err(_) => return Err("machine file is invalid".into()),
   }
 
-  // Print license file.
-  println!("license file was successfully verified!");
+  // Print machine file.
+  println!("machine file was successfully verified!");
   println!("  > {}", serde_json::to_string_pretty(&lic).unwrap());
 
-  // Hash the license key to obtain decryption key.
+  // Hash the machine key to obtain decryption key.
   let mut sha = Sha256::new();
+  let secret = [machine_key.as_bytes(), fingerprint.as_bytes()].concat();
 
-  sha.update(license_key.as_bytes());
+  sha.update(secret);
 
   let digest = sha.finalize();
 
@@ -110,16 +115,16 @@ fn main() -> Result<(), Box<dyn Error>> {
   // Concat authentication tag with ciphertext.
   ciphertext.extend_from_slice(tag);
 
-  // Decrypt the license file.
+  // Decrypt the machine file.
   let plaintext = match aes.decrypt(nonce, ciphertext.as_ref()) {
     Ok(plaintext) => String::from_utf8(plaintext)?,
-    Err(_) => return Err("failed to decrypt license file".into()),
+    Err(_) => return Err("failed to decrypt machine file".into()),
   };
 
   // Print decrypted data.
   let obj: serde_json::Value = serde_json::from_str(&plaintext).unwrap();
 
-  println!("license file was successfully decrypted!");
+  println!("machine file was successfully decrypted!");
   println!("  > {}", serde_json::to_string_pretty(&obj).unwrap());
 
   Ok(())
